@@ -1,293 +1,254 @@
+import { GoogleGenerativeAI } from "@google/generative-ai";
+
 // --- System Configurations & State ---
-/**
- * Voter Compass Configuration
- * Centralized state for API keys and global settings.
- */
-let CONFIG = {
-    GEMINI_API_KEY: '',
-    GOOGLE_CALENDAR_CLIENT_ID: '',
-    GOOGLE_CALENDAR_API_KEY: '',
-    VERSION: '1.2.0',
+const CONFIG = {
+    GEMINI_API_KEY: import.meta.env.VITE_GEMINI_API_KEY || '',
+    GOOGLE_CALENDAR_CLIENT_ID: import.meta.env.VITE_GOOGLE_CALENDAR_CLIENT_ID || '',
+    GOOGLE_CALENDAR_API_KEY: import.meta.env.VITE_GOOGLE_CALENDAR_API_KEY || '',
+    VERSION: '2.1.0',
     DEBUG: true
 };
 
-/**
- * System Logger
- * Provides structured logging for audit and testing purposes.
- */
 const Logger = {
     info: (msg) => CONFIG.DEBUG && console.log(`[INFO] ${new Date().toISOString()}: ${msg}`),
     warn: (msg) => console.warn(`[WARN] ${new Date().toISOString()}: ${msg}`),
     error: (msg, err) => console.error(`[ERROR] ${new Date().toISOString()}: ${msg}`, err)
 };
 
-// --- Initialization Logic ---
+// --- Core Utilities ---
 
 /**
- * Loads configuration from environment file.
- * Demonstration of secure secret handling in a client-side context.
+ * Sanitize User Input to prevent XSS
+ * @param {string} text 
+ * @returns {string}
  */
-async function loadConfig() {
+export function sanitizeInput(text) {
+    if (!text) return '';
+    const div = document.createElement('div');
+    div.textContent = text;
+    return div.innerHTML;
+}
+
+/**
+ * Custom Toast Notification
+ * @param {string} message 
+ * @param {string} type 
+ */
+export function showToast(message, type = 'info') {
+    const toast = document.getElementById('toast');
+    if (!toast) return;
+    
+    toast.textContent = message;
+    toast.style.borderColor = type === 'error' ? 'var(--error)' : 'var(--primary)';
+    toast.classList.add('show');
+    
+    setTimeout(() => {
+        toast.classList.remove('show');
+    }, 3000);
+}
+
+// --- API Integrations ---
+
+/**
+ * Gemini AI Integration for non-partisan guidance
+ */
+export async function getGeminiResponse(prompt) {
+    if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY.includes('YOUR_')) {
+        return "Assistant is in demonstration mode. Please configure a valid API key.";
+    }
+
     try {
-        const response = await fetch('.env');
-        const text = await response.text();
-        text.split('\n').forEach(line => {
-            const [key, value] = line.split('=');
-            if (key && value) CONFIG[key.trim()] = value.trim();
-        });
-        Logger.info("Configuration successfully loaded from .env");
-        initGoogleAPIs();
-    } catch (err) {
-        Logger.warn("Local .env not found. Ensure keys are provided in production.");
+        const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
+        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+        const systemInstruction = `You are the 'Voter Compass Guide'. Help first-time voters with clear, non-partisan guidance. Keep answers concise.`;
+        
+        const result = await model.generateContent([systemInstruction, prompt]);
+        return result.response.text();
+    } catch (error) {
+        Logger.error("Gemini API Error", error);
+        return "I'm having trouble connecting to the guide. Please check your connection.";
     }
 }
 
-document.addEventListener('DOMContentLoaded', () => {
-    Logger.info(`Voter Compass v${CONFIG.VERSION} initializing...`);
-    loadConfig();
-    renderTimeline();
-    renderRequirements();
-    attachEventListeners();
-});
+// --- Google Calendar Integration ---
+let tokenClient;
+let gapiInited = false;
+
+function initGoogleAPIs() {
+    if (typeof gapi === 'undefined') {
+        Logger.warn("GAPI script not loaded yet.");
+        return;
+    }
+
+    gapi.load('client', async () => {
+        try {
+            await gapi.client.init({
+                apiKey: CONFIG.GOOGLE_CALENDAR_API_KEY,
+                discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'],
+            });
+            gapiInited = true;
+            Logger.info("GAPI client initialized.");
+        } catch (err) {
+            Logger.error("GAPI init error", err);
+        }
+    });
+
+    if (typeof google !== 'undefined') {
+        tokenClient = google.accounts.oauth2.initTokenClient({
+            client_id: CONFIG.GOOGLE_CALENDAR_CLIENT_ID,
+            scope: 'https://www.googleapis.com/auth/calendar.events',
+            callback: '', 
+        });
+    }
+}
 
 /**
- * Event Listener Registry
- * Centralizes UI interactions for maintainability.
+ * Add election milestone to user's Google Calendar
  */
+export function addToGoogleCalendar(title, dateStr) {
+    if (!gapiInited || !tokenClient) {
+        showToast("Google Services not ready. Check your API keys.", "error");
+        return;
+    }
+
+    // Map month names to numbers for simple date parsing
+    const months = { October: '10', November: '11' };
+    const parts = dateStr.split(' ');
+    const day = parts[1].replace(/\D/g, '').padStart(2, '0');
+    const month = months[parts[0]] || '11';
+    const isoDate = `2026-${month}-${day}`;
+
+    tokenClient.callback = async (resp) => {
+        if (resp.error) {
+            showToast("Calendar access denied.", "error");
+            return;
+        }
+        
+        const event = {
+            'summary': `Election Task: ${title}`,
+            'description': `Reminder from Voter Compass for ${dateStr}.`,
+            'start': { 'date': isoDate, 'timeZone': 'UTC' },
+            'end': { 'date': isoDate, 'timeZone': 'UTC' }
+        };
+
+        try {
+            await gapi.client.calendar.events.insert({ 'calendarId': 'primary', 'resource': event });
+            showToast(`Added to calendar: ${title}`);
+        } catch (err) {
+            Logger.error("Calendar Insert Error", err);
+            showToast("Failed to add event.", "error");
+        }
+    };
+
+    tokenClient.requestAccessToken({ prompt: gapi.client.getToken() === null ? 'consent' : '' });
+}
+
+// --- UI Components & Rendering ---
+const timelineData = [
+    { date: "October 1st", title: "Registration Opens", icon: "📝", completed: true },
+    { date: "October 15th", title: "Status Verification", icon: "🔍", completed: false },
+    { date: "November 5th", title: "General Election Day", icon: "🏛️", completed: false }
+];
+
+export function renderTimeline() {
+    const container = document.getElementById('timeline-container');
+    if (!container) return;
+    
+    const fragment = document.createDocumentFragment();
+    
+    timelineData.forEach(item => {
+        const div = document.createElement('div');
+        div.className = "timeline-item flex";
+        div.style.marginBottom = "2rem";
+        div.innerHTML = `
+            <div role="img" aria-label="${item.title}" class="icon-circle" style="background: ${item.completed ? 'var(--success)' : 'var(--surface)'}; border: 2px solid var(--primary);">
+                ${item.icon}
+            </div>
+            <div class="timeline-content">
+                <span class="timeline-date">${item.date}</span>
+                <h4 class="timeline-title">${item.title}</h4>
+                <button class="btn add-cal-btn" aria-label="Add ${item.title} to Google Calendar" style="padding: 0.5rem; font-size: 0.9rem;" data-title="${item.title}" data-date="${item.date}">
+                    📅 Add to Calendar
+                </button>
+            </div>
+        `;
+        fragment.appendChild(div);
+    });
+
+    container.innerHTML = '';
+    container.appendChild(fragment);
+}
+
+// --- Event Handlers ---
 function attachEventListeners() {
-    const heroChatBtn = document.getElementById('hero-chat-btn');
-    if (heroChatBtn) heroChatBtn.addEventListener('click', toggleAssistant);
-    
-    const navStartBtn = document.getElementById('nav-start-btn');
-    if (navStartBtn) navStartBtn.addEventListener('click', toggleAssistant);
-    
-    const sendMsgBtn = document.getElementById('send-msg-btn');
-    if (sendMsgBtn) sendMsgBtn.addEventListener('click', sendMessage);
-    
+    document.addEventListener('click', async (e) => {
+        // Toggle Assistant
+        if (e.target.closest('#hero-chat-btn') || e.target.closest('#nav-start-btn') || e.target.closest('#close-assistant-btn')) {
+            toggleAssistant();
+        }
+        
+        // Send Message
+        if (e.target.closest('#send-msg-btn')) {
+            await sendMessage();
+        }
+
+        // Calendar Delegation
+        const calBtn = e.target.closest('.add-cal-btn');
+        if (calBtn) {
+            addToGoogleCalendar(calBtn.dataset.title, calBtn.dataset.date);
+        }
+    });
+
     const userInput = document.getElementById('user-input');
     if (userInput) {
         userInput.addEventListener('keypress', (e) => {
             if (e.key === 'Enter') sendMessage();
         });
     }
-
-    // Event delegation for timeline interactions
-    document.addEventListener('click', (e) => {
-        if (e.target && e.target.classList.contains('add-cal-btn')) {
-            const title = e.target.getAttribute('data-title');
-            const date = e.target.getAttribute('data-date');
-            addToGoogleCalendar(title, date);
-        }
-    });
 }
 
-// --- Google Services: Gemini AI ---
-import { GoogleGenerativeAI } from "@google/generative-ai";
-
-/**
- * Sanitize User Input
- * Basic security measure to prevent script injection.
- */
-function sanitizeInput(text) {
-    const element = document.createElement('div');
-    element.innerText = text;
-    return element.innerHTML;
-}
-
-/**
- * Gemini AI Integration
- * Leverages Google's LLM to provide interactive election guidance.
- */
-async function getGeminiResponse(prompt) {
-    if (!CONFIG.GEMINI_API_KEY || CONFIG.GEMINI_API_KEY.includes('YOUR_')) {
-        return "Assistant mode is in 'Mock' state. Please provide a valid Gemini API Key in .env.";
-    }
-
-    try {
-        const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
-        const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
-
-        // High-context persona for non-partisan, accurate guidance
-        const systemInstruction = `
-            You are the 'Voter Compass Guide', an expert on the US election process. 
-            Goal: Help first-time voters understand registration, deadlines, and requirements.
-            Tone: Encouraging, ultra-clear, professional, and strictly non-partisan.
-            Safety: Never tell a user who to vote for. Only explain HOW to vote.
-        `;
-        
-        const result = await model.generateContent([systemInstruction, prompt]);
-        const response = await result.response;
-        return response.text();
-    } catch (error) {
-        Logger.error("Gemini API Error", error);
-        return "I encountered a technical hurdle. Please verify the API key and try again.";
-    }
-}
-
-// --- Google Services: Calendar ---
-let tokenClient;
-let gapiInited = false;
-let gsisInited = false;
-
-/**
- * Initializes Google API Client and Identity Services.
- */
-function initGoogleAPIs() {
-    if (typeof gapi === 'undefined') {
-        Logger.warn("Google API Library (gapi) not loaded.");
-        return;
-    }
-
-    gapi.load('client', async () => {
-        await gapi.client.init({
-            apiKey: CONFIG.GOOGLE_CALENDAR_API_KEY,
-            discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'],
-        });
-        gapiInited = true;
-        Logger.info("GAPI Client initialized.");
-    });
-
-    tokenClient = google.accounts.oauth2.initTokenClient({
-        client_id: CONFIG.GOOGLE_CALENDAR_CLIENT_ID,
-        scope: 'https://www.googleapis.com/auth/calendar.events',
-        callback: '', 
-    });
-    gsisInited = true;
-    Logger.info("Google Identity Services (GIS) initialized.");
-}
-
-/**
- * Adds an election milestone to the user's Google Calendar.
- */
-function addToGoogleCalendar(title, dateStr) {
-    if (!gapiInited || !gsisInited) {
-        alert("Google Services are not fully initialized. Please check configuration.");
-        return;
-    }
-
-    tokenClient.callback = async (resp) => {
-        if (resp.error !== undefined) {
-            Logger.error("OAuth Error", resp);
-            return;
-        }
-        
-        const event = {
-            'summary': `Election Task: ${title}`,
-            'description': 'Reminder from your Voter Compass Assistant.',
-            'start': { 'date': '2026-11-05', 'timeZone': 'UTC' },
-            'end': { 'date': '2026-11-06', 'timeZone': 'UTC' }
-        };
-
-        try {
-            await gapi.client.calendar.events.insert({
-                'calendarId': 'primary',
-                'resource': event,
-            });
-            Logger.info(`Calendar event created: ${title}`);
-            alert(`Success! '${title}' added to your Google Calendar.`);
-        } catch (err) {
-            Logger.error("Calendar Insert Error", err);
-            alert("Failed to sync with Calendar. Ensure you have given permission.");
-        }
-    };
-
-    if (gapi.client.getToken() === null) {
-        tokenClient.requestAccessToken({prompt: 'consent'});
-    } else {
-        tokenClient.requestAccessToken({prompt: ''});
-    }
-}
-
-// --- UI Components ---
-const timelineData = [
-    { date: "October 1st", title: "Registration Opens", description: "Online registration portals are now live.", icon: "📝", completed: true },
-    { date: "October 15th", title: "Status Verification", description: "Verify your entry in the official voter rolls.", icon: "🔍", completed: false },
-    { date: "October 25th", title: "Early Voting Window", description: "Skip the queues by voting early.", icon: "🗳️", completed: false },
-    { date: "November 5th", title: "General Election Day", description: "Cast your final ballot by 8:00 PM.", icon: "🏛️", completed: false }
-];
-
-const requirements = [
-    { text: "Valid Photo ID (Driver's License/Passport)", required: true },
-    { text: "Proof of Residency (Current Utility Bill)", required: true },
-    { text: "Social Security Number (Last 4 Digits)", required: true }
-];
-
-function renderTimeline() {
-    const container = document.getElementById('timeline-container');
-    if (!container) return;
-    
-    container.innerHTML = timelineData.map((item, index) => `
-        <div class="timeline-item flex" style="margin-bottom: 2rem; position: relative;">
-            <div role="img" aria-label="${item.title}" style="width: 50px; height: 50px; background: ${item.completed ? 'var(--success)' : 'var(--surface)'}; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem; z-index: 2; border: 2px solid ${item.completed ? 'var(--success)' : 'var(--primary)'}">
-                ${item.icon}
-            </div>
-            <div style="flex: 1; margin-left: 1.5rem;">
-                <span style="font-weight: 600; color: var(--primary); font-size: 0.9rem;">${item.date}</span>
-                <h4 style="font-size: 1.25rem;">${item.title}</h4>
-                <p style="color: var(--text-muted);">${item.description}</p>
-                <button class="btn add-cal-btn" aria-label="Add ${item.title} to Google Calendar" style="padding: 0.4rem 0.8rem; font-size: 0.8rem; margin-top: 0.5rem; background: var(--surface);" data-title="${item.title}" data-date="${item.date}">
-                    Add to Google Calendar
-                </button>
-            </div>
-            ${index < timelineData.length - 1 ? `<div style="position: absolute; left: 24px; top: 50px; bottom: -32px; width: 2px; background: var(--surface); z-index: 1;"></div>` : ''}
-        </div>
-    `).join('');
-}
-
-function renderRequirements() {
-    const list = document.getElementById('requirements-list');
-    if (!list) return;
-    
-    list.innerHTML = requirements.map(req => `
-        <li class="flex" style="margin-bottom: 1rem; background: rgba(255,255,255,0.05); padding: 1rem; border-radius: 0.75rem;">
-            <input type="checkbox" aria-label="Checkmark for ${req.text}" style="width: 20px; height: 20px; accent-color: var(--primary);">
-            <span>${req.text} ${req.required ? '<small style="color: var(--accent);">(Required)</small>' : ''}</span>
-        </li>
-    `).join('');
-}
-
-// --- Assistant Widget Logic ---
-function toggleAssistant() {
+export function toggleAssistant() {
     const widget = document.getElementById('assistant-widget');
     if (!widget) return;
-    const isHidden = widget.style.display === 'none' || widget.style.display === '';
-    widget.style.display = isHidden ? 'flex' : 'none';
-    if (isHidden) {
-        document.getElementById('user-input')?.focus();
-        Logger.info("Assistant widget opened.");
-    }
+    const isVisible = widget.style.display === 'flex';
+    widget.style.display = isVisible ? 'none' : 'flex';
+    if (!isVisible) document.getElementById('user-input')?.focus();
 }
 
 async function sendMessage() {
     const input = document.getElementById('user-input');
     const messages = document.getElementById('chat-messages');
-    if (!input || !messages) return;
-    
+    if (!input || !messages || !input.value.trim()) return;
+
     const rawText = input.value.trim();
-    if (!rawText) return;
-
-    const sanitizedText = sanitizeInput(rawText);
-    
-    // User Message UI
-    const userDiv = document.createElement('div');
-    userDiv.className = 'message user';
-    userDiv.style.cssText = 'background: var(--primary); padding: 0.75rem; border-radius: 1rem 1rem 0 1rem; align-self: flex-end; max-width: 80%; color: white;';
-    userDiv.innerText = sanitizedText;
-    messages.appendChild(userDiv);
-    
+    const text = sanitizeInput(rawText);
     input.value = '';
-    messages.scrollTop = messages.scrollHeight;
 
-    // Assistant Thinking State
-    const assistantDiv = document.createElement('div');
-    assistantDiv.className = 'message assistant';
-    assistantDiv.style.cssText = 'background: var(--surface); padding: 0.75rem; border-radius: 1rem 1rem 1rem 0; align-self: flex-start; max-width: 80%;';
-    assistantDiv.innerText = "Analyzing query...";
-    messages.appendChild(assistantDiv);
-
-    // AI Execution
-    const response = await getGeminiResponse(sanitizedText);
-    assistantDiv.innerText = response;
+    appendMessage('user', text);
+    const assistantMsg = appendMessage('assistant', 'Consulting the guide...');
+    
+    const response = await getGeminiResponse(rawText);
+    assistantMsg.innerText = response;
     messages.scrollTop = messages.scrollHeight;
-    Logger.info("Gemini response delivered.");
 }
+
+export function appendMessage(type, text) {
+    const messages = document.getElementById('chat-messages');
+    const div = document.createElement('div');
+    div.className = `message ${type}`;
+    div.style.cssText = type === 'user' 
+        ? 'background: var(--primary); padding: 1rem; border-radius: 1rem 1rem 0 1rem; align-self: flex-end; color: white; max-width: 85%;'
+        : 'background: var(--surface); padding: 1rem; border-radius: 1rem 1rem 1rem 0; align-self: flex-start; max-width: 85%;';
+    div.innerText = text;
+    messages.appendChild(div);
+    messages.scrollTop = messages.scrollHeight;
+    return div;
+}
+
+// --- Initialization ---
+document.addEventListener('DOMContentLoaded', () => {
+    initGoogleAPIs();
+    renderTimeline();
+    attachEventListeners();
+    Logger.info("Voter Compass initialized.");
+});

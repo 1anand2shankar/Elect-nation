@@ -9,41 +9,34 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="styles.css">
-    <!-- Security: Content Security Policy (Basic) -->
-    <meta http-equiv="Content-Security-Policy" content="upgrade-insecure-requests">
+    
+    <!-- Security: Strengthened Content Security Policy -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' https://apis.google.com https://accounts.google.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; connect-src 'self' https://generativelanguage.googleapis.com https://www.googleapis.com; img-src 'self' data:; frame-src https://accounts.google.com;">
+    
     <!-- Google APIs -->
     <script async defer src="https://apis.google.com/js/api.js"></script>
     <script async defer src="https://accounts.google.com/gsi/client"></script>
-    <!-- Gemini AI SDK -->
-    <script type="importmap">
-      {
-        "imports": {
-          "@google/generative-ai": "https://esm.run/@google/generative-ai"
-        }
-      }
-    </script>
-    <script src="https://kit.fontawesome.com/your-code.js" crossorigin="anonymous"></script>
 </head>
 <body>
-    <nav class="container flex" style="justify-content: space-between; padding: 1.5rem 2rem;">
+    <nav class="container flex nav-header">
         <div class="logo flex">
-            <div style="width: 40px; height: 40px; background: var(--primary); border-radius: 50%; display: flex; align-items: center; justify-content: center;">
+            <div class="logo-circle" aria-hidden="true">
                 <span style="font-weight: bold; color: white;">V</span>
             </div>
-            <span style="font-size: 1.5rem; font-weight: 700;">Voter Compass</span>
+            <span class="logo-text">Voter Compass</span>
         </div>
-        <div class="nav-links flex" style="gap: 2rem;">
-            <a href="#timeline" aria-label="Go to Election Timeline" style="text-decoration: none; color: var(--text-muted);">Timeline</a>
-            <a href="#requirements" aria-label="Go to Requirements Section" style="text-decoration: none; color: var(--text-muted);">Requirements</a>
+        <div class="nav-menu flex" role="navigation">
+            <a href="#timeline" class="nav-link" aria-label="Go to Election Timeline">Timeline</a>
+            <a href="#requirements" class="nav-link" aria-label="Go to Requirements Section">Requirements</a>
             <button id="nav-start-btn" class="btn btn-primary" aria-label="Open Voting Guide Assistant">Start Voting Guide</button>
         </div>
     </nav>
 
     <main class="container">
         <!-- Hero Section -->
-        <section class="hero animate-fade-in" style="text-align: center; padding: 4rem 0;">
-            <h1 style="font-size: 4rem; margin-bottom: 1rem;">Navigate Your <span class="gradient-text">First Vote</span> with Confidence</h1>
-            <p style="font-size: 1.25rem; color: var(--text-muted); max-width: 700px; margin: 0 auto 2.5rem;">
+        <section class="hero hero-section animate-fade-in">
+            <h1 class="hero-title">Navigate Your <span class="gradient-text">First Vote</span> with Confidence</h1>
+            <p class="hero-subtitle">
                 Your personal assistant for the election process. We make voting simple, interactive, and transparent for everyone.
             </p>
             <div class="flex" style="justify-content: center;">
@@ -54,7 +47,7 @@
 
         <!-- Dynamic Timeline Section -->
         <section id="timeline" class="animate-fade-in" style="margin-top: 4rem; animation-delay: 0.2s;">
-            <h2 style="font-size: 2.5rem; margin-bottom: 2rem; text-align: center;">Election <span class="gradient-text">Milestones</span></h2>
+            <h2 class="section-title">Election <span class="gradient-text">Milestones</span></h2>
             <div class="glass-panel" id="timeline-container">
                 <!-- Timeline items will be injected here -->
             </div>
@@ -66,13 +59,15 @@
                 <h3>Are you ready?</h3>
                 <p style="color: var(--text-muted); margin: 1rem 0;">Check if you have everything needed to cast your vote.</p>
                 <ul id="requirements-list" style="list-style: none;">
-                    <!-- Requirement items -->
+                    <li>✅ Valid Photo ID</li>
+                    <li>✅ Proof of Residency</li>
+                    <li>✅ Registration Confirmation</li>
                 </ul>
             </div>
             <div class="glass-panel animate-fade-in" style="animation-delay: 0.6s;">
                 <h3>Polling Station Finder</h3>
                 <p style="color: var(--text-muted); margin: 1rem 0;">Find where to vote on election day.</p>
-                <div id="map-placeholder" style="height: 200px; background: #0f172a; border-radius: 1rem; display: flex; align-items: center; justify-content: center;">
+                <div id="map-placeholder" class="map-placeholder">
                     <span style="color: var(--text-muted);">Interactive Map Integration</span>
                 </div>
             </div>
@@ -81,23 +76,26 @@
 
     <!-- Interactive Assistant Floating Widget -->
     <div id="assistant-widget" class="glass-panel" style="position: fixed; bottom: 2rem; right: 2rem; width: 400px; height: 500px; display: none; flex-direction: column; z-index: 1000; border-color: var(--primary);">
-        <div class="flex" style="justify-content: space-between; border-bottom: 1px solid rgba(255,255,255,0.1); padding-bottom: 1rem; margin-bottom: 1rem;">
+        <div class="flex assistant-header">
             <div class="flex">
-                <div style="width: 30px; height: 30px; background: var(--secondary); border-radius: 50%;"></div>
+                <div class="assistant-avatar"></div>
                 <span style="font-weight: 600;">Voter Assistant</span>
             </div>
-            <button onclick="toggleAssistant()" style="background: none; border: none; color: var(--text); cursor: pointer;">✕</button>
+            <button id="close-assistant-btn" aria-label="Close Assistant" style="background: none; border: none; color: var(--text); cursor: pointer; font-size: 1.25rem;">✕</button>
         </div>
-        <div id="chat-messages" role="log" aria-live="polite" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem;">
+        <div id="chat-messages" role="log" aria-live="polite" style="flex: 1; overflow-y: auto; display: flex; flex-direction: column; gap: 1rem; margin-bottom: 1rem; padding-right: 0.5rem;">
             <div class="message assistant" style="background: var(--surface); padding: 0.75rem; border-radius: 1rem 1rem 1rem 0; align-self: flex-start; max-width: 80%;">
                 Hi! I'm your Election Assistant. How can I help you today?
             </div>
         </div>
-        <div class="flex">
-            <input type="text" id="user-input" aria-label="Type your question here" placeholder="Ask about registration..." style="flex: 1; background: var(--background); border: 1px solid rgba(255,255,255,0.1); padding: 0.75rem; border-radius: 0.75rem; color: var(--text);">
+        <div class="flex" style="gap: 0.5rem;">
+            <input type="text" id="user-input" class="chat-input-field" aria-label="Type your question here" placeholder="Ask about registration...">
             <button id="send-msg-btn" class="btn btn-primary" aria-label="Send message" style="padding: 0.75rem;">Send</button>
         </div>
     </div>
+
+    <!-- Toast Notification -->
+    <div id="toast" role="alert" aria-live="assertive"></div>
 
     <script type="module" src="app.js"></script>
 </body>
