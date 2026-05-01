@@ -282,3 +282,75 @@ h1, h2, h3 {
 #toast.show {
     transform: translateX(-50%) translateY(0);
 }
+
+/* Accessibility: Skip Link */
+.skip-link {
+    position: absolute;
+    top: -100px;
+    left: 0;
+    background: var(--primary);
+    color: white;
+    padding: 1rem;
+    z-index: 9999;
+    transition: top 0.3s;
+}
+
+.skip-link:focus {
+    top: 0;
+}
+
+/* Timeline Animations */
+.timeline-item {
+    margin-bottom: 2.5rem;
+    transition: var(--transition);
+}
+
+.timeline-item:hover {
+    transform: translateX(10px);
+}
+
+/* Assistant Widget Update */
+#assistant-widget {
+    position: fixed;
+    bottom: 2rem;
+    right: 2rem;
+    width: 400px;
+    height: 550px;
+    display: flex;
+    flex-direction: column;
+    z-index: var(--z-widget);
+    border-color: var(--primary);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(20px);
+    transition: var(--transition);
+    pointer-events: none;
+}
+
+#assistant-widget.active {
+    opacity: 1;
+    visibility: visible;
+    transform: translateY(0);
+    pointer-events: all;
+}
+
+.message {
+    padding: 1rem;
+    border-radius: 1rem;
+    max-width: 85%;
+    word-wrap: break-word;
+    animation: fadeIn 0.3s ease-out;
+}
+
+.message.user {
+    background: var(--primary);
+    border-radius: 1rem 1rem 0 1rem;
+    align-self: flex-end;
+    color: white;
+}
+
+.message.assistant {
+    background: var(--surface);
+    border-radius: 1rem 1rem 1rem 0;
+    align-self: flex-start;
+}
