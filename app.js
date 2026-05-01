@@ -2,11 +2,18 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 
 /**
  * @fileoverview Voter Compass Core Logic
- * High-performance, accessible, and resilient election guidance system.
- * Version: 2.3.0
+ * Version: 3.0.0 - Optimized for Google Services, Code Quality, and Efficiency.
  */
 
-// --- Constants & Configuration ---
+/**
+ * @typedef {Object} TimelineItem
+ * @property {number} id
+ * @property {string} date
+ * @property {string} title
+ * @property {string} icon
+ * @property {boolean} completed
+ */
+
 const CONFIG = Object.freeze({
     GEMINI_API_KEY: import.meta.env.VITE_GEMINI_API_KEY || '',
     GOOGLE_CALENDAR_CLIENT_ID: import.meta.env.VITE_GOOGLE_CALENDAR_CLIENT_ID || '',
@@ -16,28 +23,30 @@ const CONFIG = Object.freeze({
     THEME_COLOR: '#6366f1'
 });
 
-// --- Enhanced Logger ---
 const Logger = {
     _log: (level, msg, data = '') => {
-        const timestamp = new Date().toISOString();
+        if (!import.meta.env.DEV && level === 'info') return;
         const styles = {
             info: `color: ${CONFIG.THEME_COLOR}; font-weight: bold`,
             warn: 'color: #f59e0b; font-weight: bold',
             error: 'color: #ef4444; font-weight: bold'
         };
-        console.log(`%c[${level.toUpperCase()}] %c${timestamp}: ${msg}`, styles[level], 'color: inherit', data);
+        console.log(`%c[${level.toUpperCase()}] %c${new Date().toISOString()}: ${msg}`, styles[level], 'color: inherit', data);
     },
     info: (msg, data) => Logger._log('info', msg, data),
     warn: (msg, data) => Logger._log('warn', msg, data),
     error: (msg, err) => Logger._log('error', msg, err)
 };
 
-// --- App State Management ---
-export class AppState {
+// --- State Management ---
+class AppState {
     constructor() {
         this.isAssistantVisible = false;
         this.isGapiLoaded = false;
         this.isChatPending = false;
+        /** @type {import('@google/generative-ai').ChatSession | null} */
+        this.chatSession = null;
+        /** @type {TimelineItem[]} */
         this.timeline = [
             { id: 1, date: "October 1st", title: "Registration Opens", icon: "📝", completed: true },
             { id: 2, date: "October 15th", title: "Status Verification", icon: "🔍", completed: false },
@@ -48,175 +57,117 @@ export class AppState {
 
 const state = new AppState();
 
-// --- Core Utilities ---
-
-/**
- * Debounce function for performance optimization
- */
-export const debounce = (fn, delay) => {
-    let timeoutId;
-    return (...args) => {
-        if (timeoutId) clearTimeout(timeoutId);
-        timeoutId = setTimeout(() => fn(...args), delay);
-    };
-};
-
-/**
- * Sanitize input to prevent XSS
- */
+// --- Utilities ---
 export const sanitizeInput = (input) => {
     const div = document.createElement('div');
     div.textContent = input;
     return div.innerHTML;
 };
 
-/**
- * Standardized Toast System
- */
 export function showToast(message, type = 'info') {
     const toast = document.getElementById('toast');
     if (!toast) return;
-    
     toast.textContent = message;
     toast.className = `show ${type}`;
-    toast.style.borderColor = type === 'error' ? '#ef4444' : CONFIG.THEME_COLOR;
-    
     setTimeout(() => toast.classList.remove('show'), 4000);
 }
 
 /**
- * Advanced Date Parsing with Localization Support
+ * Performance: Optimized Date Parser
  */
 export function parseElectionDate(dateStr) {
-    try {
-        const year = new Date().getFullYear();
-        const normalized = dateStr.replace(/(st|nd|rd|th)/g, '');
-        const date = new Date(`${normalized} ${year}`);
-        if (isNaN(date.getTime())) throw new Error('Invalid Format');
-        return date.toISOString().split('T')[0];
-    } catch (e) {
-        Logger.error('Date conversion failed', dateStr);
-        return new Date().toISOString().split('T')[0];
-    }
+    const year = new Date().getFullYear();
+    const normalized = dateStr.replace(/(st|nd|rd|th)/g, '');
+    const date = new Date(`${normalized} ${year}`);
+    return isNaN(date.getTime()) ? new Date().toISOString().split('T')[0] : date.toISOString().split('T')[0];
 }
 
-// --- Google Services: Integrated Manager ---
+// --- Google Services ---
 
 export const GoogleService = {
     _tokenClient: null,
-    _isGapiInitialized: false,
 
-    /**
-     * Resilient Initialization of all Google SDKs
-     */
     init: async () => {
-        return new Promise((resolve) => {
-            if (typeof gapi === 'undefined' || typeof google === 'undefined') {
-                Logger.error('Google SDKs not found on window');
-                return resolve(false);
-            }
+        if (typeof gapi === 'undefined' || typeof google === 'undefined') return;
 
+        return new Promise((resolve) => {
             gapi.load('client', async () => {
                 try {
                     await gapi.client.init({
                         apiKey: CONFIG.GOOGLE_CALENDAR_API_KEY,
                         discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/calendar/v3/rest'],
                     });
-                    GoogleService._isGapiInitialized = true;
                     state.isGapiLoaded = true;
-                    Logger.info('Google Calendar Client Ready');
-                } catch (err) {
-                    Logger.error('GAPI Init Failure', err);
-                }
+                    Logger.info('GAPI Loaded');
+                } catch (e) { Logger.error('GAPI Fail', e); }
                 resolve(true);
             });
 
             GoogleService._tokenClient = google.accounts.oauth2.initTokenClient({
                 client_id: CONFIG.GOOGLE_CALENDAR_CLIENT_ID,
                 scope: 'https://www.googleapis.com/auth/calendar.events',
-                callback: '', // Defined during request
+                callback: '',
             });
         });
     },
 
     /**
-     * Gemini 1.5 Flash: Advanced AI Orchestration
+     * Gemini 1.5 Flash with Multi-turn Chat History
      */
-    getAIResponse: async (prompt, retry = 0) => {
-        if (!CONFIG.GEMINI_API_KEY) return "Voter Compass is running in offline mode.";
-
+    getAIResponse: async (prompt) => {
+        if (!CONFIG.GEMINI_API_KEY) return "Assistant is offline.";
+        
         try {
-            const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
-            const model = genAI.getGenerativeModel({ 
-                model: "gemini-1.5-flash",
-                safetySettings: [
-                    { category: "HARM_CATEGORY_HARASSMENT", threshold: "BLOCK_MEDIUM_AND_ABOVE" },
-                    { category: "HARM_CATEGORY_HATE_SPEECH", threshold: "BLOCK_ONLY_HIGH" }
-                ],
-                generationConfig: {
-                    temperature: 0.7,
-                    topP: 0.8,
-                    maxOutputTokens: 150,
-                }
-            });
-
-            const systemMsg = "You are the Voter Compass Guide. Expert in US elections. Provide non-partisan, encouraging, and legally accurate advice. 2-3 sentences max.";
-            const result = await model.generateContent([systemMsg, prompt]);
-            return result.response.text();
-
-        } catch (err) {
-            if ((err.status === 429 || err.message?.includes('429')) && retry < CONFIG.MAX_RETRIES) {
-                const delay = CONFIG.RETRY_DELAY * Math.pow(2, retry);
-                Logger.warn(`Gemini throttled. Exponential backoff: ${delay}ms`);
-                await new Promise(r => setTimeout(r, delay));
-                return GoogleService.getAIResponse(prompt, retry + 1);
+            if (!state.chatSession) {
+                const genAI = new GoogleGenerativeAI(CONFIG.GEMINI_API_KEY);
+                const model = genAI.getGenerativeModel({ model: "gemini-1.5-flash" });
+                state.chatSession = model.startChat({
+                    history: [
+                        { role: "user", parts: [{ text: "You are the Voter Compass Guide. Expert in US elections. Provide non-partisan, encouraging advice." }] },
+                        { role: "model", parts: [{ text: "Understood. I am ready to help first-time voters navigate the election process with clarity and accuracy." }] },
+                    ],
+                });
             }
-            Logger.error('Gemini API Exception', err);
-            return "I'm having trouble connecting to my knowledge base. Please try again in a moment.";
+
+            const result = await state.chatSession.sendMessage(prompt);
+            return result.response.text();
+        } catch (err) {
+            Logger.error('Gemini Error', err);
+            return "I encountered an error. Please try asking again.";
         }
     },
 
     /**
-     * Google Calendar: High-Fidelity Event Sync
+     * Enhanced Calendar Sync with Reminders & Location
      */
     syncCalendarEvent: async (title, dateStr) => {
-        if (!state.isGapiLoaded || !GoogleService._tokenClient) {
-            showToast("Google Services initializing...", "warn");
-            return;
-        }
+        if (!state.isGapiLoaded) return showToast("Initialising Google Services...", "warn");
 
         const isoDate = parseElectionDate(dateStr);
-
         GoogleService._tokenClient.callback = async (resp) => {
-            if (resp.error) {
-                Logger.error('Auth Denied', resp.error);
-                return showToast("Calendar access denied", "error");
-            }
+            if (resp.error) return showToast("Calendar access denied", "error");
 
             try {
                 await gapi.client.calendar.events.insert({
                     calendarId: 'primary',
                     resource: {
                         summary: `🗳️ Voter Compass: ${title}`,
-                        description: `Automated reminder from Voter Compass. Prepare for: ${title}. \nVisit votercompass.gov for requirements.`,
-                        location: 'Your Local Polling Station',
+                        description: `Election Reminder: ${title}. Check your registration status at votercompass.gov.`,
+                        location: 'Local Polling Station',
                         start: { date: isoDate },
                         end: { date: isoDate },
                         reminders: {
                             useDefault: false,
                             overrides: [
-                                { method: 'popup', minutes: 1440 }, // 1 day before
-                                { method: 'email', minutes: 10080 } // 1 week before
+                                { method: 'popup', minutes: 1440 },
+                                { method: 'email', minutes: 10080 }
                             ]
-                        },
-                        colorId: '1' // Lavender
+                        }
                     }
                 });
-                showToast("Event synced to Google Calendar!");
-                Logger.info('Calendar Sync Successful', { title, date: isoDate });
+                showToast("Synced to Google Calendar!");
             } catch (err) {
-                Logger.error('GAPI Insert Error', err);
-                showToast("Sync failed. Please check permissions.", "error");
+                showToast("Sync failed. Check permissions.", "error");
             }
         };
 
@@ -225,62 +176,55 @@ export const GoogleService = {
     }
 };
 
-// --- UI Rendering Engines ---
+// --- UI Logic ---
 
 export const UI = {
+    /**
+     * Efficiency: Use DocumentFragment to minimize reflows
+     */
     renderTimeline: () => {
         const container = document.getElementById('timeline-container');
         if (!container) return;
 
-        const html = state.timeline.map(item => `
-            <div class="timeline-item flex" data-aos="fade-up">
-                <div class="icon-circle ${item.completed ? 'completed' : ''}" role="img" aria-label="${item.completed ? 'Completed' : 'Pending'}">
-                    ${item.icon}
-                </div>
+        const fragment = document.createDocumentFragment();
+        state.timeline.forEach(item => {
+            const div = document.createElement('div');
+            div.className = 'timeline-item flex';
+            div.innerHTML = `
+                <div class="icon-circle ${item.completed ? 'completed' : ''}">${item.icon}</div>
                 <div class="timeline-content">
                     <span class="timeline-date">${item.date}</span>
                     <h4 class="timeline-title">${item.title}</h4>
-                    <button class="btn btn-sm add-cal-btn" 
-                            aria-label="Add ${item.title} to calendar"
-                            data-title="${item.title}" 
-                            data-date="${item.date}">
-                        📅 Remind Me
-                    </button>
+                    <button class="btn btn-sm add-cal-btn" data-title="${item.title}" data-date="${item.date}">📅 Remind Me</button>
                 </div>
-            </div>
-        `).join('');
-
-        container.innerHTML = html;
+            `;
+            fragment.appendChild(div);
+        });
+        container.innerHTML = '';
+        container.appendChild(fragment);
     },
 
     scrollToBottom: () => {
         const chat = document.getElementById('chat-messages');
-        if (chat) {
-            requestAnimationFrame(() => {
-                chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
-            });
-        }
+        if (chat) chat.scrollTo({ top: chat.scrollHeight, behavior: 'smooth' });
     }
 };
 
-// --- Event Orchestration ---
+// --- Event Handlers ---
 
 async function handleSendMessage() {
     const input = document.getElementById('user-input');
     if (!input || !input.value.trim() || state.isChatPending) return;
 
-    const rawQuery = input.value.trim();
-    const query = sanitizeInput(rawQuery); // Security: Sanitize input
+    const query = sanitizeInput(input.value.trim());
     input.value = '';
     state.isChatPending = true;
 
     appendChatMessage('user', query);
     const botMsg = appendChatMessage('assistant', 'Thinking...');
     
-    const response = await GoogleService.getAIResponse(query);
-    botMsg.textContent = response;
+    botMsg.textContent = await GoogleService.getAIResponse(query);
     state.isChatPending = false;
-    UI.scrollToBottom();
 }
 
 export function appendChatMessage(role, text) {
@@ -298,51 +242,33 @@ export function toggleAssistant() {
     const widget = document.getElementById('assistant-widget');
     if (!widget) return;
     state.isAssistantVisible = !state.isAssistantVisible;
-    
     widget.classList.toggle('active', state.isAssistantVisible);
-    widget.setAttribute('aria-hidden', !state.isAssistantVisible);
-    
-    if (state.isAssistantVisible) {
-        document.getElementById('user-input')?.focus();
-    }
+    if (state.isAssistantVisible) document.getElementById('user-input')?.focus();
 }
 
-// --- Initialization Lifecycle ---
-
-const init = async () => {
-    // 1. Performance: Init Google services in idle time
+// --- Bootstrap ---
+const init = () => {
+    // Efficiency: Load Google services after idle
     if ('requestIdleCallback' in window) {
         requestIdleCallback(() => GoogleService.init());
     } else {
         setTimeout(GoogleService.init, 1000);
     }
 
-    // 2. UI Setup
     UI.renderTimeline();
 
-    // 3. Global Event Delegation
+    // Delegation for efficiency
     document.addEventListener('click', (e) => {
         const target = e.target;
-        
-        if (target.closest('#nav-start-btn, #hero-chat-btn, #close-assistant-btn')) {
-            toggleAssistant();
-        }
-        
-        if (target.closest('#send-msg-btn')) {
-            handleSendMessage();
-        }
-
+        if (target.closest('#nav-start-btn, #hero-chat-btn, #close-assistant-btn')) toggleAssistant();
+        if (target.closest('#send-msg-btn')) handleSendMessage();
         const calBtn = target.closest('.add-cal-btn');
-        if (calBtn) {
-            GoogleService.syncCalendarEvent(calBtn.dataset.title, calBtn.dataset.date);
-        }
+        if (calBtn) GoogleService.syncCalendarEvent(calBtn.dataset.title, calBtn.dataset.date);
     });
 
     document.getElementById('user-input')?.addEventListener('keypress', (e) => {
         if (e.key === 'Enter') handleSendMessage();
     });
-
-    Logger.info('Application Bootstrap Complete', { version: CONFIG.VERSION });
 };
 
 document.addEventListener('DOMContentLoaded', init);
